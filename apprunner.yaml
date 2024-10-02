@@ -1,0 +1,25 @@
+version: 1.0 # version of the specification
+runtime: python3 # runtime to use
+build:
+  commands:
+    build:
+      - pip install -r requirements.txt # install dependencies
+run:
+  command: python app.py # command to run fastapi
+  network:
+    port: 8080 # port AppRunner will expose
+  env: # define environment variables
+    - name: PORT
+      value: '8080'
+    - name: LOG_LEVEL
+      value: 'info'
+    - name: FEEDLY_API_URL
+      value: 'https://cloud.feedly.com'
+    - name: MONGODB_URL
+      value: 'insightsautomation.to3so7y.mongodb.net'
+    - name: MONGODB_USERNAME
+      value: 'insights-automation-app'
+    - name: MONGODB_PASSWORD
+      value: 'hfxzrn8bpkhgz6YAM'
+    - name: AUTH_API_KEY
+      value: 'd3c89f4b-693b-4dce-ad4e-cfd47ae3cfab'
