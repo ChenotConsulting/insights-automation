@@ -91,8 +91,8 @@ class Main():
     inoreader.headers = {'Content-Type': 'application/x-www-form-urlencoded'}
 
     data = {
-      'Email': 'jp@chenotconsulting.com',
-      'Passwd': 'WKV4ymp7hqb7wzk*bcv'
+      'Email': os.getenv('INOREADER_CLIENT_EMAIL'),
+      'Passwd': os.getenv('INOREADER_CLIENT_PWD')
     }
     
     auth_request = inoreader.post(url="https://www.inoreader.com/accounts/ClientLogin", data=data)
