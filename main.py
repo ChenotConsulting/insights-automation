@@ -1,20 +1,29 @@
 import os
 from dotenv import load_dotenv
 import requests
+from bs4 import BeautifulSoup
+from newspaper import Article
 import json
+import time
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
 from datetime import datetime, timedelta
 import openai
 import smtplib
 import tiktoken
 import sys
 import logging
+import re
 from database.mongodb import MongoDB
 
 class Main():
   def __init__(self):
     logging.basicConfig(level=logging.DEBUG)
 
+    self.MONGODB_USERID = os.getenv('MONGODB_USERID')
     self.FEEDLY_API_URL = os.getenv('FEEDLY_API_URL', 'https://cloud.feedly.com')
+    self.INOREADER_API_URL = os.getenv('INOREADER_API_URL', 'https://www.inoreader.com/reader/api/0')
     self.MODEL = 'gpt-4-1106-preview'
     self.MAX_TOKENS = 128000
 
@@ -27,7 +36,9 @@ class Main():
     self.FEEDLY_FOLDERS = os.getenv('FEEDLY_FOLDERS')
     if self.FEEDLY_FOLDERS is not None:
       self.FEEDLY_FOLDERS_LIST = str(self.FEEDLY_FOLDERS).split(',')
+
     self.OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
     self.EMAIL_USERNAME = os.getenv('EMAIL_USERNAME')
     self.EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
     self.EMAIL_RECIPIENT = os.getenv('EMAIL_RECIPIENT')
@@ -43,7 +54,14 @@ class Main():
       self.FEEDLY_USER_ID = config['feedly']['user']
       self.FEEDLY_ACCESS_TOKEN = config['feedly']['accessToken']
       self.FEEDLY_FOLDERS_LIST = str(config['feedly']['folders']).split(', ')
+
+      self.INOREADER_APP_ID = str(config['inoreader']['appId'])
+      self.INOREADER_APP_KEY = str(config['inoreader']['appKey'])
+      self.INOREADER_ACCESS_TOKEN = str(config['inoreader']['accessToken'])
+      self.INOREADER_FOLDERS_LIST = str(config['inoreader']['folders']).split(', ')
+      
       self.OPENAI_API_KEY = config['openai']['apiKey']
+
       self.EMAIL_USERNAME = config['google']['emailUsername']
       self.EMAIL_PASSWORD = config['google']['emailPassword']
       self.EMAIL_RECIPIENT = config['google']['emailRecipient']
@@ -58,8 +76,29 @@ class Main():
     logging.info('Setting up the API clients...')
     self.feedly = requests.Session()
     self.feedly.headers = {'authorization': f'OAuth {self.FEEDLY_ACCESS_TOKEN}'}
+
+    self.inoreader = requests.Session()
+    self.inoreader.headers = {
+      'AppId': self.INOREADER_APP_ID,
+      'AppKey': self.INOREADER_APP_KEY,
+      'Authorization': f'Bearer {self.INOREADER_ACCESS_TOKEN}'
+    }
+
     openai.api_key = self.OPENAI_API_KEY
 
+  def inoReaderClientLogin(self):
+    inoreader = requests.Session()
+    inoreader.headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+
+    data = {
+      'Email': 'jp@chenotconsulting.com',
+      'Passwd': 'WKV4ymp7hqb7wzk*bcv'
+    }
+    
+    auth_request = inoreader.post(url="https://www.inoreader.com/accounts/ClientLogin", data=data)
+    self.auth_code = re.search(r'Auth=([^;]+)', auth_request.text)[1].strip()
+    return self.auth_code
+  
   def count_tokens(self, text):
       enc = tiktoken.get_encoding("cl100k_base")
       token_count = enc.encode(text)
@@ -89,16 +128,16 @@ class Main():
 
     return response.data[0].url
 
-  def generateInsights(self, days, userId):
+  def generateFeedlyInsights(self, days, userId):
     """
     Generate insights from the articles
     """
     if self.getConfig(userId):
       for folder_id in self.FEEDLY_FOLDERS_LIST:
-        articles = self.getArticles(folder_id=folder_id, daysdelta=days)
+        articles = self.getFeedlyArticles(folder_id=folder_id, daysdelta=days)
 
         if articles:
-          logging.info(f'Generating insights from articles in folder: {folder_id}')
+          logging.info(f'Generating insights from articles in Feedly folder: {folder_id}')
           article_prompts = [f'\nURL: {url}\nTitle: {title}\nSummary: {summary}\nContent: {content}\n' for url, title, summary, content in zip(self.urls, self.titles, self.summaries, self.contents)]
           
           role = 'You are a research analyst.'
@@ -116,16 +155,42 @@ class Main():
           return "no-articles-found"
     else: 
       return "no-config-found"
+    
+  def generateInoreaderInsights(self, numarticles, userId):
+    if self.getConfig(userId):
+      for folder_id in self.INOREADER_FOLDERS_LIST:
+        articles = self.getInoreaderArticles(folder_id, numarticles)
 
-  def emailInsights(self):
+        if articles:
+          if articles:
+            logging.info(f'Generating insights from articles in Inoreader folder: {folder_id}')
+            article_prompts = [f'\nURL: {url}\nTitle: {title}\nSummary: {summary}\nContent: {content}\n' for url, title, summary, content in zip(self.urls, self.titles, self.summaries, self.contents)]
+            
+            role = 'You are a board avisor specialising in AI sustainability.'
+            prompt = f'Extract the key insights & trends, as well as a summary of each article, in UK English from these {self.article_count} articles by accessing the articles from the URLs. For each key insight, list the source article including the title and the URL:\n'
+            for article_prompt in article_prompts:
+              prompt += article_prompt
+            insights = self.callOpenAIChat(role, prompt)
+
+            self.mongo = MongoDB()
+            if self.mongo.insertInsights(userId=userId, insights=insights, urls=self.urls):
+              return [insights, self.urls]
+            else:
+              return "insights-failed"
+        else:
+          return "no-articles-found"
+    else: 
+      return "no-config-found"
+
+  def emailFeedlyInsights(self):
     """
-    Generate insights from the articles
+    Generate insights from the Feedly articles
     """
     for folder_id in self.FEEDLY_FOLDERS_LIST:
-      articles = self.getArticles(folder_id=folder_id, daysdelta=1)
+      articles = self.getFeedlyArticles(folder_id=folder_id, daysdelta=1)
 
       if articles:
-        logging.info(f'Generating insights from articles in folder: {folder_id}')
+        logging.info(f'Generating insights from articles in Feedly folder: {folder_id}')
         article_prompts = [f'URL: {url}\nTitle: {title}\nSummary: {summary}\nContent: {content}\n' for url, title, summary, content in zip(self.urls, self.titles, self.summaries, self.contents)]
         
         role = 'You are a research analyst writing in UK English.'
@@ -137,7 +202,30 @@ class Main():
 
       self.sendEmail(subject=f'Feedly Insights from {self.article_count} articles for folder {folder_id}', body=insights, urls=self.urls)
 
-  def generateLinkedInPost(self, userId, days, insightIds, prompt_role, post_prompt, image_prompt):
+  def emailInoreaderInsights(self):
+    """
+    Generate insights from the Inoreader articles
+    """
+    if self.getConfig(self.MONGODB_USERID):
+      for folder_id in self.INOREADER_FOLDERS_LIST:
+        articles = self.getInoreaderArticles(folder_id=folder_id, numarticles=3)
+
+        if articles:
+          logging.info(f'Generating insights from articles in Inoreader folder: {folder_id}')
+          article_prompts = [f'URL: {url}\nTitle: {title}\nSummary: {summary}\Content: {content}\n' for url, title, summary, content in zip(self.urls, self.titles, self.summaries, self.contents)]
+          
+          role = 'You are a board avisor specialising in AI sustainability.'
+          prompt = f'Extract the key insights & trends, as well as a summary of each article, in UK English from these {self.article_count} articles. For each key insight, list the source article including the title and the URL:\n'
+          for article_prompt in article_prompts:
+            prompt += article_prompt
+
+          insights = self.callOpenAIChat(role, prompt)
+
+        self.sendEmail(subject=f'Inoreader Insights from {self.article_count} articles for folder {folder_id}', body=insights, urls=self.urls)
+    else:
+      return 'Could not load configuration from MongoDB'
+  
+  def generateLinkedInPostFromInoreader(self, userId, numarticles, insightIds, prompt_role, post_prompt, image_prompt):
     """
     Generate a LinkedIn post from the articles
     """
@@ -175,9 +263,9 @@ class Main():
               prompt += f'\nAll posts must include this at the bottom: Image source: DALL-E 3, as well as some hashtags related to the insights.'
               prompt += f'\nYou are tasked with generating a LinkedIn post including the links to the relevant articles from these insights: {insights}, generated from these URLs: {urls}'
       else:
-        articles = self.getArticles(folder_id=self.FEEDLY_FOLDERS_LIST[0], daysdelta=days)
+        articles = self.getInoreaderArticles(folder_id=self.INOREADER_FOLDERS_LIST[0], numarticles=numarticles)
         if articles:
-          logging.info(f'Generating LinkedIn post from articles in folder: {self.FEEDLY_FOLDERS_LIST[0]}')
+          logging.info(f'Generating LinkedIn post from Inoreader articles in folder: {self.INOREADER_FOLDERS_LIST[0]}')
           urls = self.urls
           role = prompt_role
 
@@ -214,12 +302,12 @@ class Main():
     else: 
       return "no-config-found"
 
-  def emailLinkedInPost(self):
+  def emailFeedlyLinkedInPost(self):
     """
     Generate a LinkedIn post from the articles
     """
     for folder_id in self.FEEDLY_FOLDERS_LIST:
-      articles = self.getArticles(folder_id=folder_id, daysdelta=2)
+      articles = self.getFeedlyArticles(folder_id=folder_id, daysdelta=2)
 
       if articles:
         logging.info(f'Generating LinkedIn post from articles in folder: {folder_id}')
@@ -282,12 +370,12 @@ class Main():
     response = requests.post(url, data=params)
     access_token = response.json()['access_token']
 
-  def getArticles(self, folder_id, daysdelta):
+  def getFeedlyArticles(self, folder_id, daysdelta):
     # Get articles from last 24 hours
     timeframe = datetime.now() - timedelta(days=daysdelta)
     timestamp_ms = int(timeframe.timestamp() * 1000)
 
-    logging.info(f'Getting articles for folder: {folder_id}')
+    logging.info(f'Getting Feedly articles for folder: {folder_id}')
     # Get articles ids for this folder
     feedly_url = f'{self.FEEDLY_API_URL}/v3/streams/ids?streamId={folder_id}&newerThan={timestamp_ms}&count=20'
     logging.info(f'Getting articles with Feedly URL: {feedly_url}')
@@ -316,33 +404,140 @@ class Main():
         return True
       else: 
         logging.info('========================================================================================')
-        logging.info(f'There are no articles to analyse for folder {folder_id}.')
+        logging.info(f'There are no Feedly articles to analyse for folder {folder_id}.')
         logging.info('========================================================================================') 
     else:
-      logging.warning(f'Could not get articles with status code: {response.status_code}. Details: \n{response.content}') 
+      logging.warning(f'Could not get Feedly articles with status code: {response.status_code}. Details: \n{response.content}') 
 
     return False
+  
+  def getInoreaderArticles(self, folder_id, numarticles = 3):
+    logging.info(f'Getting Inoreader articles for folder: {folder_id}')
+    # Get articles ids for this folder
+    inoreader_url = f'{self.INOREADER_API_URL}/stream/contents/{folder_id}?n={numarticles}'
+    logging.info(f'Getting articles with Inoreader URL: {inoreader_url}')
+    self.inoreader.headers = {
+      'Authorization': f'GoogleLogin auth={self.inoReaderClientLogin()}',
+      'AppId': self.INOREADER_APP_ID,
+      'AppKey': self.INOREADER_APP_KEY
+    }
+    response = self.inoreader.get(inoreader_url)
+    
+    if(response.status_code == 200):
+      # logging.info(f'Inoreader response: {json.dumps(json.loads(response.text), indent=4)}')
+      articles = json.loads(response.text)['items']
+      # logging.info(f'articles: {articles}')
+      logging.info(f'Retrieved {len(articles)} articles.')
+      self.article_count = len(articles)
+
+      if(self.article_count > 0):
+        # Concatenate articles in this folder
+        self.urls = [a['canonical'][0]['href'] for a in articles]
+        self.titles = [a['title'] for a in articles]
+        self.summaries = [a['summary']['content'] if 'summary' in a else '' for a in articles]
+        self.contents = [self.extractArticleContent(a['canonical'][0]['href']) for a in articles]
+
+        return True
+      else: 
+        logging.info('========================================================================================')
+        logging.info(f'There are no articles to analyse for Inoreader folder {folder_id}.')
+        logging.info('========================================================================================') 
+    else:
+      logging.warning(f'Could not get Inoreader articles with status code: {response.status_code}. Details: \n{response.content}') 
+
+    return False
+  
+  def extractArticleContent(self, url):
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    driver = webdriver.Chrome(options=chrome_options)
+    driver.get(url)
+
+    if re.search(r'consent.google.com([^;]+)', driver.current_url):
+      driver.find_element(By.XPATH, "//button[contains(@aria-label, 'Accept all')]").click()
+
+    time.sleep(2)
+    final_url = driver.current_url
+    driver.quit()
+
+    article = requests.get(final_url)
+    element = ''
+    content = ''
+
+    if article.status_code == 200:
+    # BEAUTIFUL SOUP METHOD
+      soup = BeautifulSoup(article.text, 'html.parser')
+      content = soup.get_text()
+
+    #   element = soup.find(class_=re.search(r'content([^;]+)'))
+    #   if element is not None:
+    #     content = element.get_text()
+    #   elif soup.find(class_ = re.compile('article-content')):
+    #     element = soup.find(class_ = re.compile('article-content'))
+    #     content = element.get_text()
+    #   elif soup.find(id_ = re.compile('article_content')):
+    #     content = soup.find(if_ = re.compile('article_content'))
+    #   elif soup.find(class_ = re.compile('main_content')):
+    #     content = soup.find(class_ = re.compile('main_content'))
+    #   elif soup.find(class_ = re.compile('article')):
+    #     content = soup.find(class_ = re.compile('article'))
+    #   elif soup.find(class_ = re.compile('content')):
+    #     content = soup.find(class_ = re.compile('content'))
+    #   elif soup.find(id_ = re.compile('content')):
+    #     content = soup.find(id_ = re.compile('content'))
+    #   elif soup.find(class_ = re.compile('post')):
+    #     content = soup.find(class_ = re.compile('post'))
+    #   elif soup.find(id_ = re.compile('post')):
+    #     content = soup.find(id_ = re.compile('post'))
+    #   elif soup.find('article'):
+    #     content = soup.find('article')      
+    #   elif soup.find('main'):
+    #     content = soup.find('main')
+    #   else:
+    #     content = soup.find('body')
+    # else: 
+    #   return 'article-not-found'
+    
+    # NEWSPAPER3K SOUP METHOD
+    # article = Article(url=final_url, fetch_images=False, user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
+    # article.download()
+    # article.parse()
+    # content = article.text
+
+    return content.strip()
 
   def main(self, arg):
     self.args = arg
     logging.info(f'Starting process for option: {self.args}')
-    self.getLocalConfig()
+    # self.getLocalConfig()
 
-    if self.args == 'Generate Insights':
-      self.emailInsights()
-    if self.args == 'Create LinkedIn post':
-      self.emailLinkedInPost()
+    if self.args == 'Generate Feedly Insights':
+      self.emailFeedlyInsights()
+    if self.args == 'Create Feedly LinkedIn post':
+      self.emailFeedlyLinkedInPost()
+    if self.args == 'Generate Inoreader Insights':
+      self.emailInoreaderInsights()
+    if self.args == 'Create Inoreader LinkedIn post':
+      self.emailInoreaderLinkedInPost()
+    if self.args == 'Test Inoreader Client Login':
+      self.inoReaderClientLogin()
     
 if __name__ == "__main__":
   main = Main()
 
   if len(sys.argv) > 1:
     if sys.argv[1] == '1':
-      main.main('Generate Insights')
+      main.main('Generate Feedly Insights')
     if sys.argv[1] == '2':
-      main.main('Create LinkedIn post')
+      main.main('Create Feedly LinkedIn post')
+    if sys.argv[1] == '3':
+      main.main('Generate Inoreader Insights')
+    if sys.argv[1] == '4':
+      main.main('Create Inoreader LinkedIn post')
+    if sys.argv[1] == '5':
+      main.main('Test Inoreader Client Login')
   else:
-    options = ['Generate Insights', 'Create LinkedIn post']
+    options = ['Generate Feedly Insights', 'Create Feedly LinkedIn post', 'Generate Inoreader Insights', 'Create Inoreader LinkedIn post', 'Test Inoreader Client Login']
     print("Select an option:")
     for index, option in enumerate(options):
         print(f"{index+1}) {option}")
