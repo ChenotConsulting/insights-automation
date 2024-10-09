@@ -27,7 +27,7 @@ class Main():
     self.MODEL = 'gpt-4-1106-preview'
     self.MAX_TOKENS = 128000
 
-  def getLocalConfig(self):
+  def getLocalConfig(self, setupClients):
     # Load environment variables
     logging.info('Loading environment variables...')
     load_dotenv()
@@ -43,7 +43,7 @@ class Main():
     self.EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
     self.EMAIL_RECIPIENT = os.getenv('EMAIL_RECIPIENT')
 
-    if(self.FEEDLY_ACCESS_TOKEN is not None):
+    if self.FEEDLY_ACCESS_TOKEN is not None and setupClients:
       self.setupClients()
 
   def getConfig(self, userId):
@@ -81,7 +81,7 @@ class Main():
     self.inoreader.headers = {
       'AppId': self.INOREADER_APP_ID,
       'AppKey': self.INOREADER_APP_KEY,
-      'Authorization': f'Bearer {self.INOREADER_ACCESS_TOKEN}'
+      'Authorization': f'GoogleLogin auth= {self.inoReaderClientLogin()}'
     }
 
     openai.api_key = self.OPENAI_API_KEY
@@ -96,8 +96,8 @@ class Main():
     }
     
     auth_request = inoreader.post(url="https://www.inoreader.com/accounts/ClientLogin", data=data)
-    self.auth_code = re.search(r'Auth=([^;]+)', auth_request.text)[1].strip()
-    return self.auth_code
+    self.INOREADER_AUTH_CODE = re.search(r'Auth=([^;]+)', auth_request.text)[1].strip()
+    return self.INOREADER_AUTH_CODE
   
   def count_tokens(self, text):
       enc = tiktoken.get_encoding("cl100k_base")
@@ -251,15 +251,15 @@ class Main():
             if post_prompt != '':
               prompt = f'{post_prompt} \n{insights} \n{urls}'
             else:
-              prompt = f'\nContext: My mission is to demystify AI and make it accessible and practical for professional services firms. Through ProfessionalPulse, I aim to deliver bespoke AI data strategies that are not only technically sound but also align with the '
-              prompt += f'unique business goals and challenges of each client. We strive to turn AI from a concept into a tangible asset, driving innovation, efficiency, and competitive advantage.'
-              prompt += f'\nThe post must be written from the voice of the consultancy.'
+              prompt = f'\nContext: My mission is to guide startups in the AI and sustainability space to build products that have a positive impact on the planet and the environment.'
+              prompt += f'As a board advisor I want to make sure that every decision made considers the UN sustainable development goals and the impact our actions have.'
+              prompt += f'\nThe post must be written from the voice of the board advisor.'
               prompt += f'\nDo not use the context in the post. It\'s for your information only.'
-              prompt += f'\nYou should only talk about the insights extracted from these articles with a bias towards process automation.'
+              prompt += f'\nYou should only talk about the insights and trends extracted from these articles with a bias towards process automation.'
               prompt += f'\nWord the insights as if I was commenting on the article rather than just writing an extract. Each insight must be a short paragraph rather than a single sentence.'
-              prompt += f'\nThe post must be written in UK English, focused on the key insights around AI and technology, and sound professional as the target audience are professionals.'
+              prompt += f'\nThe post must be written in UK English, focused on the key insights around AI and sustainability, and sound professional but not formal.'
               prompt += f'\nMention that the links are in the first comment.'
-              prompt += f'\nFinish with a call to action asking readers to message me on LinkedIn if they are interested in discussing either the insights or how I could help them.'
+              prompt += f'\nFinish with a call to action asking readers to comment on my posts.'
               prompt += f'\nAll posts must include this at the bottom: Image source: DALL-E 3, as well as some hashtags related to the insights.'
               prompt += f'\nYou are tasked with generating a LinkedIn post including the links to the relevant articles from these insights: {insights}, generated from these URLs: {urls}'
       else:
@@ -274,21 +274,19 @@ class Main():
               for url, title, summary, content in zip(self.urls, self.titles, self.summaries, self.contents):
                 prompt += f'\nURL: {url}\nTitle: {title}\nSummary: {summary}\nContent: {content}\n'
           else:
-            prompt = f'\nContext: At ProfessionalPulse, we\'re passionate about leveraging technology to transform the operations of Business Services teams within Professional Services Firms.'
-            prompt += f'Our journey began in the dynamic realm of IT and consultancy, and was inspired by real-life challenges faced by these teams.'
-            prompt += f'Today, we use our expertise and unique approach to help these teams navigate their challenges, boost efficiency, and strike a balance between their professional and personal lives.'
-            prompt += f'Discover more about our ethos, our journey, and how we can help you.'
+            prompt = f'\nContext: My mission is to guide startups in the AI and sustainability space to build products that have a positive impact on the planet and the environment.'
+            prompt += f'As a board advisor I want to make sure that every decision made considers the UN sustainable development goals and the impact our actions have.'
+            prompt += f'\nThe post must be written from the voice of the board advisor.'
             prompt += f'\nDo not use the context in the post. It\'s for your information only.'
-            prompt += f'\nYou should only talk about the insights extracted from the articles with a bias towards process automation, and the links to the articles should be neatly listed at the very end of the post, after everything else.'
-            prompt += f'\nUse numbers for each insight to point to the relevant article URL.'
-            prompt += f'\nWord the insights as if I was commeting on the article rather than just writing an extract. Each insight must be a short paragraph rather than a single sentence.'
-            prompt += f'\nThe post must be written in UK English, focused on the key insights around AI and technology, and sound professional as the target audience are professionals.'
-            prompt += f'\nMention that the links are in the first comment and add the links at the bottom, listed by the number of the insight they belong to.'
-            prompt += f'\nFinish with a call to action asking readers to message me on LinkedIn if they are interested in discussing either the insights or how I could help them.'
-            prompt += f'\nAll posts must include this at the bottom: Image source: DALL-E 3'          
+            prompt += f'\nYou should only talk about the insights and trends extracted from these articles with a bias towards process automation.'
+            prompt += f'\nWord the insights as if I was commenting on the article rather than just writing an extract. Each insight must be a short paragraph rather than a single sentence.'
+            prompt += f'\nThe post must be written in UK English, focused on the key insights around AI and sustainability, and sound professional but not formal.'
+            prompt += f'\nMention that the links are in the first comment.'
+            prompt += f'\nFinish with a call to action asking readers to comment on my posts.'
+            prompt += f'\nAll posts must include this at the bottom: Image source: DALL-E 3, as well as some hashtags related to the insights.'          
             prompt += f'\nYou are tasked with extracting insights and generate a LinkedIn post including the links to the relevant articles from these {self.article_count} articles:'
             for url, title, summary, content in zip(self.urls, self.titles, self.summaries, self.contents):
-              prompt += f'\nURL: {url}\nTitle: {title}\nSummary: {summary}\nContent: {content}\n'     
+              prompt += f'\nURL: {url}\nTitle: {title}\nSummary: {summary}\nContent: {content}\n'
 
       if prompt is not None:
         post = self.callOpenAIChat(role, prompt)
@@ -328,6 +326,37 @@ class Main():
         prompt += f'\nMention that the links are in the first comment and add the links at the bottom, listed by the number of the insight they belong to.'
         prompt += f'\nFinish with a call to action asking readers to message me on LinkedIn if they are interested in discussing either the insights or how I could help them.'
         prompt += f'\nAll posts must include this at the bottom: Image source: DALL-E 3'
+
+        post = self.callOpenAIChat(role, prompt)
+        image = self.callOpenAIImage(f'Generate an image based on the following LinkedIn post: \n{post}')
+        body = post + f'\n\nImage URL: {image}'
+        self.sendEmail(subject=f'LinkedIn post from {self.article_count} articles for folder {folder_id}', body=body, urls=self.urls)
+
+  def emailInoreaderLinkedInPost(self):
+    """
+    Generate a LinkedIn post from the articles
+    """
+    self.getConfig(self.MONGODB_USERID)
+
+    for folder_id in self.INOREADER_FOLDERS_LIST:
+      articles = self.getInoreaderArticles(folder_id=folder_id, numarticles=3)
+
+      if articles:
+        logging.info(f'Generating LinkedIn post from Inoreader articles in folder: {folder_id}')
+        role = 'You are a board advisor operating as Chenot Consulting Ltd.'
+        prompt = f'\nContext: My mission is to guide startups in the AI and sustainability space to build products that have a positive impact on the planet and the environment.'
+        prompt += f'As a board advisor I want to make sure that every decision made considers the UN sustainable development goals and the impact our actions have.'
+        prompt += f'\nThe post must be written from the voice of the board advisor.'
+        prompt += f'\nDo not use the context in the post. It\'s for your information only.'
+        prompt += f'\nYou should only talk about the insights and trends extracted from these articles with a bias towards process automation.'
+        prompt += f'\nWord the insights as if I was commenting on the article rather than just writing an extract. Each insight must be a short paragraph rather than a single sentence.'
+        prompt += f'\nThe post must be written in UK English, focused on the key insights around AI and sustainability, and sound professional but not formal.'
+        prompt += f'\nMention that the links are in the first comment.'
+        prompt += f'\nFinish with a call to action asking readers to comment on my posts.'
+        prompt += f'\nAll posts must include this at the bottom: Image source: DALL-E 3, as well as some hashtags related to the insights.'          
+        prompt += f'\nYou are tasked with extracting insights and generate a LinkedIn post including the links to the relevant articles from these {self.article_count} articles:'
+        for url, title, summary, content in zip(self.urls, self.titles, self.summaries, self.contents):
+          prompt += f'\nURL: {url}\nTitle: {title}\nSummary: {summary}\nContent: {content}\n'
 
         post = self.callOpenAIChat(role, prompt)
         image = self.callOpenAIImage(f'Generate an image based on the following LinkedIn post: \n{post}')

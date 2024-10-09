@@ -19,7 +19,7 @@ class Post(BaseModel):
   days: int = 2
   numArticles: int = 3
   insightIds: list = [] # TODO: Replace array with text and split items by comma
-  role: str = 'You are a marketing manager working for a consultancy called ProfessionalPulse.'
+  role: str = 'You are a board advisor operating as Chenot Consulting Ltd.'
   post_prompt: str = ''
   image_prompt: str = f'Generate an image based on the following LinkedIn post:'
 
