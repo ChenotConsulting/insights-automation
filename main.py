@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
-from newspaper import Article
+# from newspaper import Article
 import json
 import time
 from selenium import webdriver
@@ -19,12 +19,12 @@ from database.mongodb import MongoDB
 
 class Main():
   def __init__(self):
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
 
     self.MONGODB_USERID = os.getenv('MONGODB_USERID')
     self.FEEDLY_API_URL = os.getenv('FEEDLY_API_URL', 'https://cloud.feedly.com')
     self.INOREADER_API_URL = os.getenv('INOREADER_API_URL', 'https://www.inoreader.com/reader/api/0')
-    self.MODEL = 'gpt-4-1106-preview'
+    self.MODEL = 'chatgpt-4o-latest'
     self.MAX_TOKENS = 128000
 
   def getLocalConfig(self, setupClients):
@@ -106,6 +106,7 @@ class Main():
       return len(token_count)
 
   def callOpenAIChat(self, role, prompt):
+    logging.info('Connecting to ChatGPT to generate content...')
     response = openai.ChatCompletion.create(
       model=self.MODEL, 
       temperature=0.2,
@@ -118,6 +119,7 @@ class Main():
     return response['choices'][0]['message']['content']
 
   def callOpenAIImage(self, prompt):
+    logging.info('Connecting to ChatGPT to generate an image...')
     response = openai.Image.create(
       model="dall-e-3",
       prompt=prompt,
@@ -354,12 +356,12 @@ class Main():
         prompt += f'\nMention that the links are in the first comment.'
         prompt += f'\nFinish with a call to action asking readers to comment on my posts.'
         prompt += f'\nAll posts must include this at the bottom: Image source: DALL-E 3, as well as some hashtags related to the insights.'          
-        prompt += f'\nYou are tasked with extracting insights and generate a LinkedIn post including the links to the relevant articles from these {self.article_count} articles:'
+        prompt += f'\nYou are tasked with extracting insights and generating a LinkedIn post without icons, including the links to the relevant articles from these {self.article_count} articles:'
         for url, title, summary, content in zip(self.urls, self.titles, self.summaries, self.contents):
           prompt += f'\nURL: {url}\nTitle: {title}\nSummary: {summary}\nContent: {content}\n'
 
         post = self.callOpenAIChat(role, prompt)
-        image = self.callOpenAIImage(f'Generate an image based on the following LinkedIn post: \n{post}')
+        image = self.callOpenAIImage(f'Generate an image based on the following LinkedIn post. The image must have no text on it: \n{post}')
         body = post + f'\n\nImage URL: {image}'
         self.sendEmail(subject=f'LinkedIn post from {self.article_count} articles for folder {folder_id}', body=body, urls=self.urls)
 
